@@ -3,6 +3,7 @@
 	import { tweened } from "svelte/motion";
 	import { cubicInOut } from "svelte/easing";
 	import DeterminantDiagram from "./DeterminantDiagram.svelte";
+	import SingularRecoveryDiagram from "./SingularRecoveryDiagram.svelte";
 	import {
 		identity2d,
 		determinant2d,
@@ -14,6 +15,7 @@
 	let matrix = [...identity2d];
 	let reversing = false;
 	let inverseShown = false;
+	let recoveryShown = false;
 	let animationId = 0;
 	const progress = tweened(0);
 	$: valid = values.every(
@@ -36,6 +38,7 @@
 
 	function updateMatrix() {
 		cancelInverse();
+		recoveryShown = false;
 		if (
 			values.every(
 				(value) =>
@@ -56,6 +59,12 @@
 	function updateEntry(index, value) {
 		values[index] = value;
 		updateMatrix();
+	}
+
+	function tryRecovery() {
+		if (!valid || !singular) return;
+		cancelInverse();
+		recoveryShown = true;
 	}
 
 	async function showInverse() {
@@ -90,9 +99,15 @@
 		</p>
 		<div class="workspace">
 			<div class="diagram-panel">
-				<DeterminantDiagram {matrix} progress={$progress} {singular} />
+				{#if recoveryShown && singular}
+					<SingularRecoveryDiagram {matrix} />
+				{:else}
+					<DeterminantDiagram {matrix} progress={$progress} {singular} />
+				{/if}
 				<p class="diagram-status" aria-live="polite">
-					{#if reversing}Applying A⁻¹ to the transformed square…
+					{#if recoveryShown}Reason from the collapsed output alone: which
+						inputs are consistent with it?
+					{:else if reversing}Applying A⁻¹ to the transformed square…
 					{:else if inverseShown}A⁻¹A = I: the square is back where it started.
 					{:else if singular}The square has collapsed to {matrix.every(
 							(v) => v === 0
@@ -146,19 +161,24 @@
 						>
 					</div>
 					<p>
-						The original square has area 1. Its image under A has area <b
-							>{fmt(Math.abs(det))}</b
-						>.
+						{#if recoveryShown}
+							Observed output area: <b>0</b>.
+						{:else}
+							The original square has area 1. Its image under A has area <b
+								>{fmt(Math.abs(det))}</b
+							>.
+						{/if}
 					</p>
 				</div>
 				<div class="verdict" class:singular>
-					<h3>{singular ? "Not invertible" : "Invertible"}</h3>
+					<h3 class="status-badge">
+						{singular ? "✕ NOT INVERTIBLE" : "✓ INVERTIBLE"}
+					</h3>
 					{#if singular}
 						<p>Zero determinant → zero area → information lost.</p>
 						<p>
-							Collapsing the square loses dimensional information. Different
-							input points land in the same place, so the transformation cannot
-							be uniquely reversed.
+							The square has collapsed. Can the output tell us which shape we
+							started with?
 						</p>
 					{:else}
 						<p>Nonzero determinant → nonzero area → reversible.</p>
@@ -172,20 +192,45 @@
 							</p>{/if}
 					{/if}
 				</div>
-				<button
-					class="inverse-button"
-					on:click={showInverse}
-					disabled={singular || !valid || reversing}
-					aria-describedby="inverse-help"
-					>{reversing ? "Reversing…" : "Show Inverse"}</button
-				>
-				<p id="inverse-help" class="help">
-					{singular
-						? "No inverse exists when det(A) = 0."
-						: "Watch A⁻¹ return the transformed square to the dashed original."}
-				</p>
+				{#if singular}
+					<button
+						class="inverse-button"
+						on:click={recoveryShown
+							? () => (recoveryShown = false)
+							: tryRecovery}
+						disabled={!valid}
+						aria-expanded={recoveryShown}
+						aria-describedby="recovery-help"
+						>{recoveryShown
+							? "Back to collapsed square"
+							: "Try to Recover Original"}</button
+					>
+					<p id="recovery-help" class="help">
+						Test different possible originals against the same output.
+					</p>
+				{:else}
+					<button
+						class="inverse-button"
+						on:click={showInverse}
+						disabled={singular || !valid || reversing}
+						aria-describedby="inverse-help"
+						>{reversing ? "Reversing…" : "Show Inverse"}</button
+					>
+					<p id="inverse-help" class="help">
+						{singular
+							? "No inverse exists when det(A) = 0."
+							: "Watch A⁻¹ return the transformed square to the dashed original."}
+					</p>
+				{/if}
 				{#if inverseShown}
 					<div class="inverse-result">
+						{#if !reversing && $progress === 1}
+							<div class="inverse-success" role="status">
+								<strong>A⁻¹A = I</strong><span
+									>✓ Transformation successfully reversed</span
+								>
+							</div>
+						{/if}
 						{#if inverseFinite}
 							<span>A⁻¹ =</span>
 							<div class="inverse-matrix" aria-label="Inverse matrix">
@@ -375,7 +420,7 @@
 	}
 	.readout > p:last-child,
 	.verdict p {
-		font-size: 13px;
+		font-size: 15px;
 		line-height: 1.65;
 		margin: 10px 0 0;
 	}
@@ -389,6 +434,19 @@
 	}
 	.verdict h3 {
 		color: #5eead4;
+	}
+	.status-badge {
+		display: inline-block;
+		padding: 9px 12px;
+		border: 1px solid #5eead4;
+		border-radius: 7px;
+		background: #16352f;
+		font-size: 17px;
+		letter-spacing: 0.025em;
+	}
+	.singular .status-badge {
+		border-color: #fcd34d;
+		background: #393123;
 	}
 	.verdict.singular {
 		border-color: #fbbf24;
@@ -442,6 +500,23 @@
 		font-size: 12px;
 		line-height: 1.6;
 		color: #94a3b8;
+	}
+	.inverse-success {
+		width: 100%;
+		display: grid;
+		gap: 8px;
+		padding: 16px;
+		border: 1px solid #5eead4;
+		border-radius: 10px;
+		background: #16352f;
+		color: #99f6e4;
+	}
+	.inverse-success strong {
+		font-size: 26px;
+	}
+	.inverse-success span {
+		font-size: 15px;
+		line-height: 1.5;
 	}
 	@media (max-width: 800px) {
 		section {

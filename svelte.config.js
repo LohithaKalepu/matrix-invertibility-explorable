@@ -14,7 +14,8 @@ const preprocess = sveltePreprocess({
 const config = {
 	preprocess: sequence([preprocess, vitePreprocess(), preprocessMeltUI()]),
 	kit: {
-		adapter: adapterStatic()
+		adapter: adapterStatic(),
+		paths: { base: process.env.BASE_PATH || "" }
 	},
 	vitePlugin: {
 		// experimental: {

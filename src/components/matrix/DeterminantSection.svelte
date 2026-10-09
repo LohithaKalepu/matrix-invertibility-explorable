@@ -8,6 +8,7 @@
 		identity2d,
 		determinant2d,
 		inverse2d,
+		matrixExplanation2d,
 		formatMatrixNumber as fmt
 	} from "$utils/matrix2d.js";
 
@@ -16,7 +17,32 @@
 	let reversing = false;
 	let inverseShown = false;
 	let recoveryShown = false;
+	let recoveryScene = null;
 	let animationId = 0;
+	let predictionPending = false;
+	let predictionEditing = false;
+	let predictionFeedback = "";
+	$: concealResult = predictionPending || predictionEditing;
+
+	function commitPrediction() {
+		if (!valid) return;
+		predictionEditing = false;
+		predictionPending = true;
+		predictionFeedback = "";
+	}
+
+	function revealPrediction(answer = null) {
+		predictionPending = false;
+		predictionEditing = false;
+		predictionFeedback =
+			answer === null
+				? ""
+				: answer === !singular
+				? singular
+					? "Correct! A zero determinant means the transformation cannot be reversed."
+					: "Correct! A nonzero determinant means the transformation is invertible."
+				: "Not quite. Compare the area before and after the transformation.";
+	}
 	const progress = tweened(0);
 	$: valid = values.every(
 		(value) =>
@@ -28,6 +54,7 @@
 	$: singular = det === 0;
 	$: inverse = inverse2d(matrix);
 	$: inverseFinite = inverse && inverse.every(Number.isFinite);
+	$: explanation = matrixExplanation2d(matrix);
 
 	function cancelInverse() {
 		animationId += 1;
@@ -37,6 +64,9 @@
 	}
 
 	function updateMatrix() {
+		predictionPending = false;
+		predictionEditing = true;
+		predictionFeedback = "";
 		cancelInverse();
 		recoveryShown = false;
 		if (
@@ -54,6 +84,9 @@
 	function preset(next) {
 		values = [...next];
 		updateMatrix();
+		// Presets commit immediately; input edits commit on change.
+		predictionEditing = false;
+		predictionPending = true;
 	}
 
 	function updateEntry(index, value) {
@@ -63,12 +96,14 @@
 
 	function tryRecovery() {
 		if (!valid || !singular) return;
+		if (concealResult) revealPrediction();
 		cancelInverse();
 		recoveryShown = true;
 	}
 
 	async function showInverse() {
 		if (!valid || singular || reversing) return;
+		if (concealResult) revealPrediction();
 		cancelInverse();
 		const id = animationId;
 		inverseShown = true;
@@ -99,16 +134,19 @@
 		</p>
 		<div class="workspace">
 			<div class="diagram-panel">
-				{#if recoveryShown && singular}
-					<SingularRecoveryDiagram {matrix} />
-				{:else}
-					<DeterminantDiagram {matrix} progress={$progress} {singular} />
-				{/if}
+				<DeterminantDiagram
+					{matrix}
+					progress={$progress}
+					{singular}
+					recovery={recoveryShown}
+					{recoveryScene}
+				/>
 				<p class="diagram-status" aria-live="polite">
 					{#if recoveryShown}Reason from the collapsed output alone: which
 						inputs are consistent with it?
 					{:else if reversing}Applying A⁻¹ to the transformed square…
 					{:else if inverseShown}A⁻¹A = I: the square is back where it started.
+					{:else if concealResult}Observe how A changes the square.
 					{:else if singular}The square has collapsed to {matrix.every(
 							(v) => v === 0
 						)
@@ -119,135 +157,160 @@
 				</p>
 			</div>
 			<div class="controls">
-				<div class="matrix-heading">
-					<h3>Your matrix</h3>
-					<span>A = [[a, b], [c, d]]</span>
-				</div>
-				<div class="matrix-editor" role="group" aria-label="Matrix A entries">
-					{#each ["a", "b", "c", "d"] as label, i}
-						<label class:pink={i % 2 === 0} class:purple={i % 2 === 1}>
-							<span>{label}</span>
-							<input
-								type="number"
-								step="any"
-								min="-1000000"
-								max="1000000"
-								value={Number.isFinite(values[i]) ? values[i] : ""}
-								on:input={(event) =>
-									updateEntry(i, event.currentTarget.valueAsNumber)}
-								aria-label={`Matrix entry ${label}`}
-								aria-invalid={!valid}
-							/>
-						</label>
-					{/each}
-				</div>
-				{#if !valid}<p class="validation" role="alert">
-						Enter four finite numbers between −1,000,000 and 1,000,000. The
-						diagram keeps the last valid matrix.
-					</p>{/if}
-				<div class="presets">
-					<button on:click={() => preset(identity2d)}>Reset to Identity</button>
-					<button on:click={() => preset([1, 2, 1, 2])}>Singular example</button
-					>
-				</div>
-				<div class="readout">
-					<p class="formula">det(A) = ad − bc</p>
-					<div>
-						<span>det(A)</span><strong title={String(det)}>{fmt(det)}</strong>
+				{#if recoveryShown && singular}
+					<SingularRecoveryDiagram
+						{matrix}
+						bind:scene={recoveryScene}
+						onBack={() => {
+							recoveryShown = false;
+							recoveryScene = null;
+						}}
+					/>
+				{:else}
+					<div class="matrix-heading">
+						<h3>Your matrix</h3>
+						<span class="math-label"><i>A</i> · 2 × 2</span>
 					</div>
-					<div>
-						<span>|det(A)| <small>area scale factor</small></span><strong
-							title={String(Math.abs(det))}>{fmt(Math.abs(det))}</strong
+					<div class="matrix-editor" role="group" aria-label="Matrix A entries">
+						{#each ["a", "b", "c", "d"] as label, i}
+							<label class:pink={i % 2 === 0} class:purple={i % 2 === 1}>
+								<span>{label}</span>
+								<input
+									type="number"
+									step="any"
+									min="-1000000"
+									max="1000000"
+									value={Number.isFinite(values[i]) ? values[i] : ""}
+									on:input={(event) =>
+										updateEntry(i, event.currentTarget.valueAsNumber)}
+									on:change={commitPrediction}
+									aria-label={`Matrix entry ${label}`}
+									aria-invalid={!valid}
+								/>
+							</label>
+						{/each}
+					</div>
+					{#if !valid}<p class="validation" role="alert">
+							Enter four finite numbers between −1,000,000 and 1,000,000. The
+							diagram keeps the last valid matrix.
+						</p>{/if}
+					<div class="presets">
+						<button on:click={() => preset(identity2d)}
+							>Reset to Identity</button
+						>
+						<button on:click={() => preset([1, 2, 1, 2])}
+							>Singular example</button
 						>
 					</div>
-					<p>
-						{#if recoveryShown}
-							Observed output area: <b>0</b>.
-						{:else}
-							The original square has area 1. Its image under A has area <b
-								>{fmt(Math.abs(det))}</b
-							>.
-						{/if}
-					</p>
-				</div>
-				<div class="verdict" class:singular>
-					<h3 class="status-badge">
-						{singular ? "✕ NOT INVERTIBLE" : "✓ INVERTIBLE"}
-					</h3>
-					{#if singular}
-						<p>Zero determinant → zero area → information lost.</p>
-						<p>
-							The square has collapsed. Can the output tell us which shape we
-							started with?
-						</p>
-					{:else}
-						<p>Nonzero determinant → nonzero area → reversible.</p>
-						<p>
-							Each output comes from one unique input. The inverse matrix takes
-							every transformed point back to its original position.
-						</p>
-						{#if det < 0}<p>
-								The negative sign means orientation is flipped; area is still
-								positive.
-							</p>{/if}
-					{/if}
-				</div>
-				{#if singular}
-					<button
-						class="inverse-button"
-						on:click={recoveryShown
-							? () => (recoveryShown = false)
-							: tryRecovery}
-						disabled={!valid}
-						aria-expanded={recoveryShown}
-						aria-describedby="recovery-help"
-						>{recoveryShown
-							? "Back to collapsed square"
-							: "Try to Recover Original"}</button
-					>
-					<p id="recovery-help" class="help">
-						Test different possible originals against the same output.
-					</p>
-				{:else}
-					<button
-						class="inverse-button"
-						on:click={showInverse}
-						disabled={singular || !valid || reversing}
-						aria-describedby="inverse-help"
-						>{reversing ? "Reversing…" : "Show Inverse"}</button
-					>
-					<p id="inverse-help" class="help">
-						{singular
-							? "No inverse exists when det(A) = 0."
-							: "Watch A⁻¹ return the transformed square to the dashed original."}
-					</p>
-				{/if}
-				{#if inverseShown}
-					<div class="inverse-result">
-						{#if !reversing && $progress === 1}
-							<div class="inverse-success" role="status">
-								<strong>A⁻¹A = I</strong><span
-									>✓ Transformation successfully reversed</span
+					{#if predictionPending && valid}
+						<div
+							class="prediction"
+							role="group"
+							aria-labelledby="prediction-question"
+						>
+							<p id="prediction-question">
+								Do you think this transformation is reversible?
+							</p>
+							<div class="prediction-choices">
+								<button on:click={() => revealPrediction(true)}
+									>Yes — invertible</button
+								>
+								<button on:click={() => revealPrediction(false)}
+									>No — non-invertible</button
+								>
+								<button on:click={() => revealPrediction()}
+									>Skip prediction</button
 								>
 							</div>
-						{/if}
-						{#if inverseFinite}
-							<span>A⁻¹ =</span>
-							<div class="inverse-matrix" aria-label="Inverse matrix">
-								{#each inverse as entry}<span title={String(entry)}
-										>{fmt(entry)}</span
-									>{/each}
-							</div>
-						{:else}<p>
-								The inverse entries exceed the numeric display range.
-							</p>{/if}
-						<p>
-							The readouts describe A, even while the picture returns to the
-							original square. A⁻¹A = I means the two transformations undo each
-							other.
+						</div>
+					{/if}
+					{#if predictionFeedback}
+						<p class="prediction-feedback" role="status">
+							{predictionFeedback}
 						</p>
-						<button on:click={cancelInverse}>Back to transformed square</button>
-					</div>
+					{/if}
+					{#if !concealResult}
+						<div class="readout">
+							<div class="det-equation">
+								<span>det(<i>A</i>) =</span><strong title={String(det)}
+									>{fmt(det)}</strong
+								>
+							</div>
+							<div class="area-result">
+								<span>|det(<i>A</i>)| · area scale</span><span
+									title={String(Math.abs(det))}>{fmt(Math.abs(det))}</span
+								>
+							</div>
+						</div>
+						<div class="verdict" class:singular>
+							<h3>{singular ? "A is non-invertible" : "A is invertible"}</h3>
+							<p aria-live="polite">{explanation}</p>
+						</div>
+					{/if}
+					{#if singular}
+						<button
+							class="inverse-button"
+							on:click={recoveryShown
+								? () => (recoveryShown = false)
+								: tryRecovery}
+							disabled={!valid}
+							aria-expanded={recoveryShown}
+							aria-describedby="recovery-help"
+							>{recoveryShown
+								? "Back to collapsed square"
+								: "Try to Recover Original"}</button
+						>
+						<p id="recovery-help" class="help">
+							Test different possible originals against the same output.
+						</p>
+					{:else}
+						<button
+							class="inverse-button"
+							on:click={showInverse}
+							disabled={singular || !valid || reversing}
+							aria-describedby="inverse-help"
+							>{reversing ? "Reversing…" : "Show Inverse"}</button
+						>
+						<p id="inverse-help" class="help">
+							{singular
+								? "No inverse exists when det(A) = 0."
+								: "Watch A⁻¹ return the transformed square to the dashed original."}
+						</p>
+					{/if}
+					{#if inverseShown}
+						<div class="inverse-result">
+							{#if !reversing && $progress === 1}
+								<div class="inverse-success" role="status">
+									<strong>A⁻¹A = I</strong><span>Transformation reversed</span>
+								</div>
+							{/if}
+							{#if inverseFinite}
+								<span>A⁻¹ =</span>
+								<div class="inverse-matrix" aria-label="Inverse matrix">
+									{#each inverse as entry}<span title={String(entry)}
+											>{fmt(entry)}</span
+										>{/each}
+								</div>
+							{:else}<p>
+									The inverse entries exceed the numeric display range.
+								</p>{/if}
+							<p>
+								Readouts describe A. Applying its inverse returns the square to
+								its starting position.
+							</p>
+							<button on:click={cancelInverse}
+								>Back to transformed square</button
+							>
+						</div>
+					{/if}
+					<details class="math-note">
+						<summary>About area and determinant</summary>
+						<p>
+							det(A) = ad − bc. The unit square starts with area 1; its image
+							has area |det(A)|. A negative determinant reverses orientation,
+							while area remains nonnegative.
+						</p>
+					</details>
 				{/if}
 			</div>
 		</div>
@@ -257,92 +320,108 @@
 <style>
 	section {
 		position: relative;
-		background: #111720;
-		color: #e2e8f0;
-		padding: 88px 32px;
-		border-top: 1px solid #334155;
+		background: hsl(var(--b3));
+		color: hsl(var(--bc));
+		padding: 64px 0;
 		scroll-margin-top: 24px;
 	}
-	.section-inner {
-		max-width: 1160px;
-		margin: 0 auto;
+	.eyebrow,
+	h2,
+	.intro {
+		margin-left: clamp(24px, 4vw, 64px);
+		margin-right: 24px;
 	}
 	.eyebrow {
 		color: #67e8f9;
 		font-size: 12px;
 		text-transform: uppercase;
 		letter-spacing: 0.15em;
-		margin: 0 0 14px;
+		margin-bottom: 12px;
 	}
 	h2 {
 		font-size: clamp(30px, 4vw, 48px);
 		line-height: 1.15;
 		font-weight: 650;
-		margin: 0 0 18px;
-		letter-spacing: -0.035em;
+		margin-bottom: 16px;
 	}
 	.intro {
 		max-width: 670px;
 		color: #aab9ca;
 		font-size: 18px;
 		line-height: 1.65;
-		margin: 0 0 38px;
+		margin-bottom: 36px;
 	}
 	.workspace {
 		display: grid;
-		grid-template-columns: minmax(0, 1.35fr) minmax(320px, 1fr);
-		gap: 36px;
+		grid-template-columns: minmax(0, 1.9fr) minmax(300px, 1fr);
 		align-items: start;
 	}
 	.diagram-panel {
 		min-width: 0;
 	}
 	.diagram-status {
-		color: #cbd5e1;
+		margin: 12px 28px;
+		color: #aab9ca;
 		font-size: 14px;
 		line-height: 1.6;
-		min-height: 46px;
-		margin: 20px 0 0;
 	}
 	.controls {
-		background: #19222f;
-		border: 1px solid #334155;
-		padding: 24px;
-		border-radius: 16px;
+		min-width: 0;
+		padding: 8px clamp(24px, 3vw, 48px) 32px;
 	}
 	.matrix-heading {
 		display: flex;
-		flex-wrap: wrap;
-		justify-content: space-between;
-		gap: 8px;
 		align-items: center;
-		margin-bottom: 16px;
+		justify-content: space-between;
+		margin-bottom: 20px;
 	}
 	h3 {
 		font-weight: 600;
-		font-size: 16px;
+		font-size: 18px;
 		margin: 0;
 	}
-	.matrix-heading > span {
-		color: #94a3b8;
-		font-size: 13px;
+	.math-label {
+		font-family: "Old Standard TT", serif;
+		font-size: 20px;
 	}
 	.matrix-editor {
 		display: grid;
 		grid-template-columns: 1fr 1fr;
 		gap: 12px;
+		padding: 10px 16px;
+		position: relative;
+	}
+	.matrix-editor::before,
+	.matrix-editor::after,
+	.inverse-matrix::before,
+	.inverse-matrix::after {
+		content: "";
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		width: 8px;
+		border-block: 2px solid #94a3b8;
+	}
+	.matrix-editor::before,
+	.inverse-matrix::before {
+		left: 0;
+		border-left: 2px solid #94a3b8;
+	}
+	.matrix-editor::after,
+	.inverse-matrix::after {
+		right: 0;
+		border-right: 2px solid #94a3b8;
 	}
 	label {
 		display: flex;
 		align-items: center;
-		gap: 12px;
-		background: #101823;
-		border: 1px solid #46536a;
-		padding: 8px 12px;
-		border-radius: 8px;
+		gap: 10px;
+		border-bottom: 1px solid #46536a;
+		padding: 5px 0;
 	}
 	label span {
 		font-style: italic;
+		font-family: serif;
 	}
 	.pink {
 		color: #ff8ad0;
@@ -353,37 +432,35 @@
 	input {
 		min-width: 0;
 		width: 100%;
-		font-size: 21px;
 		background: transparent;
+		color: inherit;
+		font-size: 22px;
 		padding: 4px 0;
-		color: #f8fafc;
-	}
-	label:focus-within {
-		outline: 2px solid #67e8f9;
-		outline-offset: 2px;
 	}
 	input:focus {
-		outline: none;
+		outline: 2px solid #67e8f9;
+		outline-offset: 2px;
 	}
 	.presets {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 8px;
-		margin: 14px 0 24px;
+		margin: 20px 0 28px;
 	}
 	button {
 		border: 1px solid #53637a;
-		background: #253245;
-		border-radius: 7px;
-		padding: 9px 12px;
-		font-size: 12px;
-		color: #e2e8f0;
+		background: transparent;
+		border-radius: 5px;
+		padding: 10px 12px;
+		font-size: 13px;
+		color: inherit;
 		cursor: pointer;
 	}
 	button:hover:enabled {
-		background: #35465d;
+		background: #253245;
 	}
-	button:focus-visible {
+	button:focus-visible,
+	summary:focus-visible {
 		outline: 2px solid #67e8f9;
 		outline-offset: 3px;
 	}
@@ -391,143 +468,159 @@
 		opacity: 0.45;
 		cursor: not-allowed;
 	}
+	.prediction {
+		margin: 20px 0;
+	}
+	.prediction p,
+	.prediction-feedback {
+		font-size: 14px;
+		line-height: 1.6;
+		margin: 0 0 12px;
+	}
+	.prediction-choices {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+	}
+	.prediction-feedback {
+		color: #67e8f9;
+	}
 	.readout {
 		border-top: 1px solid #334155;
-		padding-top: 18px;
-	}
-	.formula {
-		color: #aab9ca;
-		font-size: 15px;
-		margin: 0 0 16px;
+		padding-top: 22px;
 	}
 	.readout > div {
 		display: flex;
-		justify-content: space-between;
 		align-items: baseline;
+		justify-content: space-between;
 		gap: 12px;
 		margin: 10px 0;
 	}
+	.det-equation {
+		font-family: "Old Standard TT", serif;
+		font-size: 27px;
+	}
 	.readout strong {
-		font-size: 25px;
 		color: #67e8f9;
-		font-variant-numeric: tabular-nums;
+		font-weight: 400;
 		overflow-wrap: anywhere;
 	}
-	small {
-		display: block;
-		font-size: 11px;
-		color: #94a3b8;
-	}
-	.readout > p:last-child,
-	.verdict p {
-		font-size: 15px;
-		line-height: 1.65;
-		margin: 10px 0 0;
-	}
-	.readout > p:last-child {
+	.area-result {
 		color: #aab9ca;
+		font-size: 14px;
 	}
 	.verdict {
-		border-left: 3px solid #5eead4;
-		padding: 0 0 0 14px;
 		margin: 24px 0;
 	}
 	.verdict h3 {
-		color: #5eead4;
+		color: #67e8f9;
 	}
-	.status-badge {
-		display: inline-block;
-		padding: 9px 12px;
-		border: 1px solid #5eead4;
-		border-radius: 7px;
-		background: #16352f;
-		font-size: 17px;
-		letter-spacing: 0.025em;
+	.verdict.singular h3 {
+		color: #c4a7ff;
 	}
-	.singular .status-badge {
-		border-color: #fcd34d;
-		background: #393123;
-	}
-	.verdict.singular {
-		border-color: #fbbf24;
-	}
-	.verdict.singular h3,
-	.validation {
-		color: #fcd34d;
-	}
-	.validation {
-		font-size: 13px;
-		margin-top: 12px;
+	.verdict p {
+		font-size: 14px;
+		line-height: 1.6;
+		margin: 8px 0 0;
+		color: #aab9ca;
 	}
 	.inverse-button {
 		width: 100%;
 		background: #67e8f9;
 		color: #10202c;
-		font-size: 15px;
-		font-weight: 650;
 		border-color: #67e8f9;
+		font-weight: 650;
+		font-size: 15px;
 	}
 	.inverse-button:hover:enabled {
 		background: #a5f3fc;
 	}
-	.help {
+	.help,
+	.validation,
+	.math-note {
 		font-size: 12px;
 		line-height: 1.6;
 		color: #aab9ca;
 		margin: 10px 0 0;
 	}
+	.validation {
+		color: #ff8ad0;
+	}
 	.inverse-result {
-		margin-top: 20px;
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: 14px;
+		gap: 16px;
+		margin-top: 24px;
 	}
 	.inverse-matrix {
+		position: relative;
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 		gap: 8px 20px;
-		border-left: 2px solid #94a3b8;
-		border-right: 2px solid #94a3b8;
-		padding: 8px 14px;
-		font-variant-numeric: tabular-nums;
-		font-size: 15px;
+		padding: 8px 16px;
+		font-family: "Old Standard TT", serif;
+		font-size: 18px;
 		text-align: right;
+		max-width: 100%;
+		overflow-wrap: anywhere;
 	}
 	.inverse-result p {
+		font-size: 12px;
+		color: #aab9ca;
+		line-height: 1.6;
 		width: 100%;
 		margin: 0;
-		font-size: 12px;
-		line-height: 1.6;
-		color: #94a3b8;
 	}
 	.inverse-success {
 		width: 100%;
-		display: grid;
-		gap: 8px;
-		padding: 16px;
-		border: 1px solid #5eead4;
-		border-radius: 10px;
-		background: #16352f;
-		color: #99f6e4;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px 16px;
+		align-items: baseline;
+		color: #67e8f9;
 	}
 	.inverse-success strong {
-		font-size: 26px;
+		font-family: "Old Standard TT", serif;
+		font-size: 24px;
 	}
 	.inverse-success span {
-		font-size: 15px;
-		line-height: 1.5;
+		font-size: 13px;
 	}
-	@media (max-width: 800px) {
+	.math-note {
+		margin-top: 24px;
+	}
+	.math-note summary {
+		cursor: pointer;
+	}
+	.math-note p {
+		margin-top: 10px;
+	}
+	@media (max-width: 950px) {
+		.workspace {
+			grid-template-columns: minmax(0, 1.4fr) minmax(300px, 1fr);
+		}
+	}
+	@media (max-width: 700px) {
+		.diagram-panel {
+			position: sticky;
+			top: 0;
+			z-index: 2;
+			background: hsl(var(--b3));
+			align-self: start;
+		}
+		.diagram-status {
+			font-size: 12px;
+			margin: 8px 20px;
+		}
 		section {
-			padding: 56px 20px;
+			padding: 48px 0;
 		}
 		.workspace {
 			grid-template-columns: 1fr;
-			gap: 24px;
 		}
 		.controls {
-			padding: 20px;
+			padding: 28px 24px;
 		}
 	}
 </style>

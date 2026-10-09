@@ -11,6 +11,7 @@
 	import { gsap, ScrollTrigger } from "$utils/gsap.js";
 	import Footer from "./matrix/Footer.svelte";
 	import DeterminantSection from "./matrix/DeterminantSection.svelte";
+	import DeterminantStory from "./matrix/DeterminantStory.svelte";
 	import mq from "$stores/mq.js";
 	import { RingLoader } from "svelte-loading-spinners";
 	import { colorVector } from "$data/variables";
@@ -83,6 +84,7 @@
 	class="fixed left-0 top-0 bottom-0 w-2 bg-neutral scale-y-0 rounded-full"
 />
 
+<DeterminantStory />
 <DeterminantSection />
 
 <Footer />

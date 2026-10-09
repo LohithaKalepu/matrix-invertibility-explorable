@@ -62,3 +62,39 @@ export function formatMatrixNumber(value) {
 	}
 	return String(Number(value.toPrecision(6)));
 }
+
+// Spectral condition number: sigma_max / sigma_min = sigma_max² / |det|.
+// Normalize first to avoid squaring large entries. Use the existing determinant
+// so the explanatory classification agrees with the playground's exact-zero rule.
+export function conditionNumber2d(matrix) {
+	const det = determinant2d(matrix);
+	if (det === 0) return Infinity;
+	const scale = Math.max(...matrix.map(Math.abs));
+	const [a, b, c, d] = matrix.map((value) => value / scale);
+	const u = a * a + c * c,
+		v = b * b + d * d;
+	const largestSquared = (u + v + Math.hypot(u - v, 2 * (a * b + c * d))) / 2;
+	return largestSquared / Math.abs(det / scale / scale);
+}
+
+export function matrixExplanation2d(matrix) {
+	const det = determinant2d(matrix);
+	if (matrix.every((value, i) => value === identity2d[i])) {
+		return "The identity matrix leaves every vector unchanged. The area and orientation remain the same.";
+	}
+	if (det === 0) {
+		return "The determinant is zero, so the transformation collapses two-dimensional area. Different inputs can produce the same output.";
+	}
+	// A conservative educational warning: directional scales differ by 100 million.
+	// This does not change invertibility, inverse calculations or recovery access.
+	if (conditionNumber2d(matrix) >= 1e8) {
+		return "The transformation strongly compresses space in at least one direction. Recovering the original input may be sensitive to numerical errors.";
+	}
+	if (det < 0 && Math.abs(det) === 1) {
+		return "The transformation reverses orientation while preserving area.";
+	}
+	const orientation = det > 0 ? "preserves" : "reverses";
+	return `The transformation ${orientation} orientation. Areas are scaled by a factor of ${formatMatrixNumber(
+		Math.abs(det)
+	)}.`;
+}
